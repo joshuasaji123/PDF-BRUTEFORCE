@@ -207,7 +207,7 @@ if __name__ == "__main__":
         password_found = brute_force_pdf(args.pdf_path, args.min_length, args.max_length, charset, words, args.num_threads)
         if password_found:
             print(f"Password found: {password_found}")
-        else:
+        else: 
             print("Failed to find the password.")
     else:
         print(f"Password found: {password}")
