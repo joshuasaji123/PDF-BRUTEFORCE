@@ -194,7 +194,7 @@ if __name__ == "__main__":
 
     # List of common words
     words = [
-        "password", "1234", 
+        "password", "12345", 
     ]
 
     print(f"Starting brute-force attack on {args.pdf_path} with {args.num_threads} threads using default charset and common words...")

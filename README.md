@@ -48,7 +48,7 @@ python pdf_bruteforce.py topsecret.pdf --min-length 4 --max-length 11 --num-thre
     ```
 - **Common Words**: The script starts by trying a list of common words and their combinations with the charset:
     ```python
-    words = ["password", "1234"]
+    words = ["password", "12345"]
     ```
 - **Multithreading**: The script uses multiple threads to speed up the brute-force process. Each thread works on a different segment of the password space.
 - **Progress Logging**: The script logs the progress of the brute-force attack, including the percentage complete with a precision of six decimal places.
