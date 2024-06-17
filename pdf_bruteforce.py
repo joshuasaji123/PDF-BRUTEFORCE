@@ -8,6 +8,7 @@ from itertools import product
 found = False
 password = None
 lock = threading.Lock()
+total_passwords_tried = 0
 
 def check_password(pdf_path, password):
     try:
@@ -38,8 +39,12 @@ def generate_word_combinations(words, charset, min_length, max_length, start, st
                     yield word + ''.join(combo)
                     yield ''.join(combo) + word
 
+def save_password(password):
+    with open("found_passwords.txt", "a") as f:
+        f.write(f"{password}\n")
+
 def worker(pdf_path, charset, min_length, max_length, words, start, step, total_combinations, start_time):
-    global found, password
+    global found, password, total_passwords_tried
     passwords_tried = 0
 
     # Generate passwords from words and their combinations
@@ -47,15 +52,15 @@ def worker(pdf_path, charset, min_length, max_length, words, start, step, total_
         if found:
             return
         passwords_tried += 1
-        percent_complete = ((passwords_tried * step) / total_combinations) * 100
-        elapsed_time = time.time() - start_time
-        print(f"Trying: {password_to_check}, Tried: {passwords_tried * step}, Elapsed: {elapsed_time:.2f}s, Complete: {percent_complete:.6f}%")
+        with lock:
+            total_passwords_tried += 1
         
         if check_password(pdf_path, password_to_check):
             with lock:
                 if not found:  # Double-check to avoid race condition
                     found = True
                     password = password_to_check
+                    save_password(password)
             return
 
     # Generate passwords from charset
@@ -63,19 +68,19 @@ def worker(pdf_path, charset, min_length, max_length, words, start, step, total_
         if found:
             return
         passwords_tried += 1
-        percent_complete = (passwords_tried * step) / total_combinations * 100
-        elapsed_time = time.time() - start_time
-        print(f"Trying: {password_to_check}, Tried: {passwords_tried * step}, Elapsed: {elapsed_time:.2f}s, Complete: {percent_complete:.6f}%")
+        with lock:
+            total_passwords_tried += 1
         
         if check_password(pdf_path, password_to_check):
             with lock:
                 if not found:  # Double-check to avoid race condition
                     found = True
                     password = password_to_check
+                    save_password(password)
             return
 
 def brute_force_pdf(pdf_path, min_length, max_length, charset, words, num_threads):
-    global found, password
+    global found, password, total_passwords_tried
     start_time = time.time()
 
     # Calculate total combinations for brute-force
@@ -87,6 +92,10 @@ def brute_force_pdf(pdf_path, min_length, max_length, charset, words, num_thread
     total_combinations += total_word_combinations
 
     print(f"Total combinations to try: {total_combinations}")
+
+    # Start logging thread
+    logging_thread = threading.Thread(target=logging_worker, args=(total_combinations, start_time))
+    logging_thread.start()
 
     # Start threads for brute-force
     threads = []
@@ -100,18 +109,47 @@ def brute_force_pdf(pdf_path, min_length, max_length, charset, words, num_thread
     for thread in threads:
         thread.join()
 
+    # Ensure logging thread also stops
+    logging_thread.join()
+
     elapsed_time = time.time() - start_time
     if found:
         print(f"Password found: {password}")
-        print(f"Passwords tried: {total_combinations}, Time elapsed: {elapsed_time:.2f}s")
+        print(f"Passwords tried: {total_passwords_tried}, Time elapsed: {convert_seconds_to_human_readable(elapsed_time)}")
         return password
     else:
-        print(f"No password found, Passwords tried: {total_combinations}, Time elapsed: {elapsed_time:.2f}s")
+        print(f"No password found, Passwords tried: {total_passwords_tried}, Time elapsed: {convert_seconds_to_human_readable(elapsed_time)}")
         return None
 
+def logging_worker(total_combinations, start_time):
+    global total_passwords_tried, found
+    while not found:
+        time.sleep(10)
+        with lock:
+            passwords_tried = total_passwords_tried
+        elapsed_time = time.time() - start_time
+        percent_complete = (passwords_tried / total_combinations) * 100
+        if passwords_tried > 0:
+            eta_seconds = elapsed_time * (total_combinations - passwords_tried) / passwords_tried
+        else:
+            eta_seconds = float('inf')
+        
+        eta = convert_seconds_to_human_readable(eta_seconds)
+        elapsed_time_human_readable = convert_seconds_to_human_readable(elapsed_time)
+        print(f"[LOG] Tried: {passwords_tried}, Elapsed: {elapsed_time_human_readable}, Complete: {percent_complete:.6f}%, ETA: {eta}")
+
+def convert_seconds_to_human_readable(seconds):
+    days = seconds // (24 * 3600)
+    seconds %= (24 * 3600)
+    hours = seconds // 3600
+    seconds %= 3600
+    minutes = seconds // 60
+    seconds %= 60
+    return f"{int(days)}d {int(hours)}h {int(minutes)}m {int(seconds)}s"
+
 def known_words_worker(pdf_path, words, charset, max_length, start, step, total_combinations, start_time):
-    global found, password
-    total_passwords_tried = 0
+    global found, password, total_passwords_tried
+    total_passwords_tried_local = 0
 
     for index, word in enumerate(words):
         if found:
@@ -120,12 +158,12 @@ def known_words_worker(pdf_path, words, charset, max_length, start, step, total_
             continue
         passwords_tried = 0
         word_start_time = time.time()
-        print(f"Trying known word: {word}")
         if check_password(pdf_path, word):
             with lock:
                 if not found:  # Double-check to avoid race condition
                     found = True
                     password = word
+                    save_password(password)
             return
 
         for length in range(len(word) + 1, max_length + 1):
@@ -133,34 +171,30 @@ def known_words_worker(pdf_path, words, charset, max_length, start, step, total_
                 if found:
                     return
                 passwords_tried += 1
-                total_passwords_tried += 1
+                total_passwords_tried_local += 1
+                with lock:
+                    total_passwords_tried += 1
                 password_to_check = word + ''.join(combo)
-                percent_complete = (total_passwords_tried * step) / total_combinations * 100
-                elapsed_time = time.time() - start_time
-                print(f"Trying: {password_to_check}, Tried: {total_passwords_tried * step}, Elapsed: {elapsed_time:.2f}s, Complete: {percent_complete:.6f}%")
                 if check_password(pdf_path, password_to_check):
                     with lock:
                         if not found:  # Double-check to avoid race condition
                             found = True
                             password = password_to_check
+                            save_password(password)
                     return
 
                 password_to_check = ''.join(combo) + word
-                percent_complete = (total_passwords_tried * step) / total_combinations * 100
-                elapsed_time = time.time() - start_time
-                print(f"Trying: {password_to_check}, Tried: {total_passwords_tried * step}, Elapsed: {elapsed_time:.2f}s, Complete: {percent_complete:.6f}%")
                 if check_password(pdf_path, password_to_check):
                     with lock:
                         if not found:  # Double-check to avoid race condition
                             found = True
                             password = password_to_check
+                            save_password(password)
                     return
 
         word_elapsed_time = time.time() - word_start_time
-        print(f"Finished trying word: {word}, Tried: {passwords_tried}, Elapsed: {word_elapsed_time:.2f}s")
 
     total_elapsed_time = time.time() - start_time
-    print(f"Known words phase complete. Total tried: {total_passwords_tried}, Total elapsed: {total_elapsed_time:.2f}s")
 
 def try_known_words_first(pdf_path, words, charset, max_length, num_threads):
     global found, password
@@ -168,6 +202,12 @@ def try_known_words_first(pdf_path, words, charset, max_length, num_threads):
 
     # Calculate total combinations for known words and their variations
     total_combinations = sum(len(charset) ** (max_length - len(word)) * 2 for word in words)
+
+    print(f"Total combinations to try with known words: {total_combinations}")
+
+    # Start logging thread
+    logging_thread = threading.Thread(target=logging_worker, args=(total_combinations, start_time))
+    logging_thread.start()
 
     threads = []
     for i in range(num_threads):
@@ -177,6 +217,9 @@ def try_known_words_first(pdf_path, words, charset, max_length, num_threads):
 
     for thread in threads:
         thread.join()
+
+    # Ensure logging thread also stops
+    logging_thread.join()
 
 if __name__ == "__main__":
     import argparse
@@ -194,7 +237,7 @@ if __name__ == "__main__":
 
     # List of common words
     words = [
-        "password", "12345", 
+        "password", "123", 
     ]
 
     print(f"Starting brute-force attack on {args.pdf_path} with {args.num_threads} threads using default charset and common words...")
@@ -207,7 +250,7 @@ if __name__ == "__main__":
         password_found = brute_force_pdf(args.pdf_path, args.min_length, args.max_length, charset, words, args.num_threads)
         if password_found:
             print(f"Password found: {password_found}")
-        else: 
+        else:
             print("Failed to find the password.")
     else:
         print(f"Password found: {password}")
